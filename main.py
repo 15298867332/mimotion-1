@@ -15,7 +15,7 @@ from util.aes_help import encrypt_data, decrypt_data
 import util.zepp_helper as zeppHelper
 import util.push_util as push_util
 
-# 第一步：先定义所有工具函数，再初始化全局变量
+# 工具函数定义（先定义，后使用）
 def get_int_value_default(_config: dict, _key, default):
     _config.setdefault(_key, default)
     return int(_config.get(_key))
@@ -76,15 +76,22 @@ def get_min_max_by_time(hour=None, minute=None):
     
     return calc_min_step, calc_max_step
 
-# 第二步：初始化全局变量（此时get_beijing_time已定义）
-config = {}
+# 全局变量初始化（关键：补充必填变量的默认值，避免未定义错误）
+# ========== 请根据实际需求修改以下配置 ==========
+config = {
+    "MIN_STEP": 4000,  # 基础最小步数
+    "MAX_STEP": 8000   # 基础最大步数
+}
+users = "15298867332"  # 多账号用#分隔，例："+8613800138000#user@example.com"
+passwords = "www732525349"  # 多密码用#分隔，与账号一一对应，例："pwd123#pwd456"
+# ========== 可选配置 ==========
 user_tokens = {}
-use_concurrent = False
-sleep_seconds = 1
-encrypt_support = False
-aes_key = ""
-push_config = {}
-time_bj = get_beijing_time()  # 现在调用不会报错
+use_concurrent = False  # 是否启用多线程并发
+sleep_seconds = 1       # 串行执行时账号间隔秒数
+encrypt_support = False # 是否启用token加密（需配置aes_key）
+aes_key = ""            # AES加密密钥（encrypt_support=True时必填）
+push_config = {}        # 推送配置（如钉钉/企业微信token，按需配置）
+time_bj = get_beijing_time()  # 初始化北京时间
 
 class MiMotionRunner:
     def __init__(self, _user, _passwd):
@@ -205,6 +212,11 @@ def run_single_account(total, idx, user_mi, passwd_mi):
     return exec_result
 
 def execute():
+    # 兜底：若users/passwords未配置，直接提示并退出
+    if not users or not passwords:
+        print("错误：未配置账号（users）或密码（passwords），请先在全局变量中填写！")
+        exit(1)
+    
     user_list = users.split('#')
     passwd_list = passwords.split('#')
     exec_results = []
@@ -233,33 +245,41 @@ def execute():
         print(summary)
         push_util.push_results(push_results, summary, push_config)
     else:
-        print(f"账号数长度[{len(user_list)}]和密码数长度[{len(passwd_list)}]不匹配，跳过执行")
+        print(f"错误：账号数[{len(user_list)}]和密码数[{len(passwd_list)}]不匹配！")
         exit(1)
 
 def prepare_user_tokens() -> dict:
     data_path = r"encrypted_tokens.data"
-    if os.path.exists(data_path):
+    if os.path.exists(data_path) and encrypt_support and aes_key:  # 增加密钥校验
         with open(data_path, 'rb') as f:
             data = f.read()
         try:
             decrypted_data = decrypt_data(data, aes_key, None)
             return json.loads(decrypted_data.decode('utf-8', errors='strict'))
         except:
-            print("密钥不正确或者加密内容损坏 放弃token")
+            print("提示：密钥不正确或者加密内容损坏，放弃加载token缓存")
             return dict()
     else:
+        if not encrypt_support:
+            print("提示：未启用token加密，跳过加载缓存")
+        elif not aes_key:
+            print("提示：未配置加密密钥，跳过加载token缓存")
         return dict()
 
 def persist_user_tokens():
     data_path = r"encrypted_tokens.data"
+    if not aes_key:
+        print("错误：启用了token加密但未配置aes_key，无法保存缓存！")
+        return
     try:
         encrypted_data = encrypt_data(json.dumps(user_tokens).encode('utf-8'), aes_key, None)
         with open(data_path, 'wb') as f:
             f.write(encrypted_data)
-        print("token已加密保存")
+        print("提示：token已加密保存")
     except:
-        print("token加密保存失败：", traceback.format_exc())
+        print("错误：token加密保存失败：", traceback.format_exc())
 
+# 初始化token缓存（增加兜底，避免密钥错误导致程序崩溃）
 user_tokens = prepare_user_tokens()
 
 if __name__ == "__main__":
