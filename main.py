@@ -48,7 +48,7 @@ def get_min_max_by_time(hour=None, minute=None):
     base_max = get_int_value_default(config, 'MAX_STEP', 25000)
 
     weekday = time_bj.weekday()
-    weekend_rate = 0.7 if weekday ==6 else 1.0
+    weekend_rate = 0.5 if weekday ==6 else 1.0
 
     random_min_rate = 0.85 + random.random() * 0.3
     random_max_rate = 0.85 + random.random() * 0.3
