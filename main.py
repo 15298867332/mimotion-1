@@ -4,16 +4,29 @@ import traceback
 from datetime import datetime
 import pytz
 import uuid
-
 import json
 import random
 import re
 import time
 import os
+import base64
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+# 移除push_util导入（不再推送）
 from util.aes_help import encrypt_data, decrypt_data
 import util.zepp_helper as zeppHelper
-import util.push_util as push_util
+
+# ===================== 加密配置（从环境变量读取，适配GitHub Actions） =====================
+# 本地运行时可手动设置环境变量，CI运行时由GitHub Secrets注入
+ENCRYPT_PASSWORD = os.getenv("ENCRYPT_PASSWORD", "local_test_password")
+# 盐值：从环境变量读取字符串，再转为bytes（GitHub Secrets仅支持字符串）
+ENCRYPT_SALT_STR = os.getenv("ENCRYPT_SALT", "local_test_salt_123456")
+ENCRYPT_SALT = ENCRYPT_SALT_STR.encode()
+# 加密账号密码文件路径（确保该文件已提交到GitHub仓库）
+ENCRYPT_CONFIG_FILE = os.getenv("ENCRYPT_CONFIG_FILE", "encrypted_accounts.json")
+# ======================================================================================
 
 # 工具函数定义（先定义，后使用）
 def get_int_value_default(_config: dict, _key, default):
@@ -68,6 +81,7 @@ def get_min_max_by_time(hour=None, minute=None):
     calc_min_step = int(time_rate * min_step)
     calc_max_step = int(time_rate * max_step)
     
+    # 周日步数减半逻辑
     weekday = time_bj.weekday()
     if weekday == 6:
         calc_min_step = int(calc_min_step / 2)
@@ -76,22 +90,89 @@ def get_min_max_by_time(hour=None, minute=None):
     
     return calc_min_step, calc_max_step
 
-# 全局变量初始化（关键：补充必填变量的默认值，避免未定义错误）
-# ========== 请根据实际需求修改以下配置 ==========
+# ========== 账号密码加密/解密工具函数 ==========
+def generate_fernet_key(password: str, salt: bytes) -> bytes:
+    """根据密码和盐值生成Fernet加密密钥"""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+    return key
+
+def encrypt_accounts(users_str: str, passwords_str: str, output_file: str):
+    """加密账号密码并保存到文件（首次配置时使用）
+    :param users_str: 明文账号串（#分隔）
+    :param passwords_str: 明文密码串（#分隔）
+    :param output_file: 加密文件保存路径
+    """
+    key = generate_fernet_key(ENCRYPT_PASSWORD, ENCRYPT_SALT)
+    fernet = Fernet(key)
+    # 加密账号和密码
+    encrypted_users = fernet.encrypt(users_str.encode()).decode()
+    encrypted_passwords = fernet.encrypt(passwords_str.encode()).decode()
+    # 保存到JSON文件
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump({
+            "encrypted_users": encrypted_users,
+            "encrypted_passwords": encrypted_passwords
+        }, f, ensure_ascii=False, indent=2)
+    print(f"✅ 账号密码已加密保存到 {output_file}")
+
+def decrypt_accounts(input_file: str) -> tuple[str, str]:
+    """从加密文件解密账号密码
+    :return: (解密后的账号串, 解密后的密码串)
+    """
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(f"❌ 加密配置文件 {input_file} 不存在！")
+    
+    # 读取加密文件
+    with open(input_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    # 生成密钥并解密
+    key = generate_fernet_key(ENCRYPT_PASSWORD, ENCRYPT_SALT)
+    fernet = Fernet(key)
+    try:
+        users_str = fernet.decrypt(data["encrypted_users"].encode()).decode()
+        passwords_str = fernet.decrypt(data["encrypted_passwords"].encode()).decode()
+        return users_str, passwords_str
+    except Exception as e:
+        raise ValueError(f"❌ 解密失败！请检查密码/盐值是否正确：{str(e)}")
+
+# 全局变量初始化
 config = {
     "MIN_STEP": 4000,  # 基础最小步数
     "MAX_STEP": 8000   # 基础最大步数
 }
-users = "15298867332"  # 多账号用#分隔，例："+8613800138000#user@example.com"
-passwords = "www732525349"  # 多密码用#分隔，与账号一一对应，例："pwd123#pwd456"
-# ========== 可选配置 ==========
 user_tokens = {}
 use_concurrent = False  # 是否启用多线程并发
 sleep_seconds = 1       # 串行执行时账号间隔秒数
 encrypt_support = False # 是否启用token加密（需配置aes_key）
 aes_key = ""            # AES加密密钥（encrypt_support=True时必填）
-push_config = {}        # 推送配置（如钉钉/企业微信token，按需配置）
 time_bj = get_beijing_time()  # 初始化北京时间
+
+# 解密获取账号密码（核心：从加密文件读取，非明文）
+users = ""
+passwords = ""
+try:
+    print(f"🔑 开始解密账号密码（文件：{ENCRYPT_CONFIG_FILE}）")
+    users, passwords = decrypt_accounts(ENCRYPT_CONFIG_FILE)
+    print("✅ 账号密码解密成功！")
+except Exception as e:
+    print(f"❌ 账号密码解密失败：{str(e)}")
+    print("\n===== 首次使用请执行以下步骤生成加密配置文件 =====")
+    print("1. 配置环境变量 ENCRYPT_PASSWORD 和 ENCRYPT_SALT（本地/CI）")
+    print("2. 取消下方注释，填写明文账号密码后运行一次代码")
+    print("3. 运行后注释掉该代码，再次运行即可自动解密")
+    # ===================== 首次配置用（运行后注释） =====================
+    # plain_users = "+8613800138000#user@example.com"  # 你的明文账号（#分隔）
+    # plain_passwords = "pwd123#pwd456"                # 你的明文密码（#分隔）
+    # encrypt_accounts(plain_users, plain_passwords, ENCRYPT_CONFIG_FILE)
+    # ==================================================================
+    exit(1)
 
 class MiMotionRunner:
     def __init__(self, _user, _passwd):
@@ -212,9 +293,9 @@ def run_single_account(total, idx, user_mi, passwd_mi):
     return exec_result
 
 def execute():
-    # 兜底：若users/passwords未配置，直接提示并退出
+    # 校验账号密码是否为空
     if not users or not passwords:
-        print("错误：未配置账号（users）或密码（passwords），请先在全局变量中填写！")
+        print("❌ 错误：解密后的账号或密码为空！")
         exit(1)
     
     user_list = users.split('#')
@@ -222,6 +303,7 @@ def execute():
     exec_results = []
     if len(user_list) == len(passwd_list):
         idx, total = 0, len(user_list)
+        print(f"📢 开始执行步数修改，共 {total} 个账号")
         if use_concurrent:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -233,53 +315,52 @@ def execute():
                 idx += 1
                 if idx < total:
                     time.sleep(sleep_seconds)
+        # 保存token缓存（若启用加密）
         if encrypt_support:
             persist_user_tokens()
+        # 统计结果（仅控制台输出，无推送）
         success_count = 0
-        push_results = []
         for result in exec_results:
-            push_results.append(result)
             if result['success'] is True:
                 success_count += 1
-        summary = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
+        summary = f"\n===== 执行结果汇总 =====\n📊 执行账号总数：{total}\n✅ 成功：{success_count}\n❌ 失败：{total - success_count}"
         print(summary)
-        push_util.push_results(push_results, summary, push_config)
     else:
-        print(f"错误：账号数[{len(user_list)}]和密码数[{len(passwd_list)}]不匹配！")
+        print(f"❌ 错误：账号数[{len(user_list)}]和密码数[{len(passwd_list)}]不匹配！")
         exit(1)
 
 def prepare_user_tokens() -> dict:
     data_path = r"encrypted_tokens.data"
-    if os.path.exists(data_path) and encrypt_support and aes_key:  # 增加密钥校验
+    if os.path.exists(data_path) and encrypt_support and aes_key:
         with open(data_path, 'rb') as f:
             data = f.read()
         try:
             decrypted_data = decrypt_data(data, aes_key, None)
             return json.loads(decrypted_data.decode('utf-8', errors='strict'))
         except:
-            print("提示：密钥不正确或者加密内容损坏，放弃加载token缓存")
+            print("⚠️ 提示：密钥不正确或者加密内容损坏，放弃加载token缓存")
             return dict()
     else:
         if not encrypt_support:
-            print("提示：未启用token加密，跳过加载缓存")
+            print("ℹ️ 提示：未启用token加密，跳过加载缓存")
         elif not aes_key:
-            print("提示：未配置加密密钥，跳过加载token缓存")
+            print("ℹ️ 提示：未配置加密密钥，跳过加载token缓存")
         return dict()
 
 def persist_user_tokens():
     data_path = r"encrypted_tokens.data"
     if not aes_key:
-        print("错误：启用了token加密但未配置aes_key，无法保存缓存！")
+        print("❌ 错误：启用了token加密但未配置aes_key，无法保存缓存！")
         return
     try:
         encrypted_data = encrypt_data(json.dumps(user_tokens).encode('utf-8'), aes_key, None)
         with open(data_path, 'wb') as f:
             f.write(encrypted_data)
-        print("提示：token已加密保存")
+        print("✅ 提示：token已加密保存")
     except:
-        print("错误：token加密保存失败：", traceback.format_exc())
+        print("❌ 错误：token加密保存失败：", traceback.format_exc())
 
-# 初始化token缓存（增加兜底，避免密钥错误导致程序崩溃）
+# 初始化token缓存
 user_tokens = prepare_user_tokens()
 
 if __name__ == "__main__":
