@@ -28,7 +28,21 @@ def get_min_max_by_time(hour=None, minute=None):
     if minute is None:
         minute = time_bj.minute
 
-    time_rate = min((hour * 60 + minute) / (22 * 60), 1)
+    # 步数增长区间：8点到20点，仅在这个区间内步数按小时递增
+    start_hour = 8
+    end_hour = 20
+    total_grow_minutes = (end_hour - start_hour) * 60
+    current_minutes = hour * 60 + minute - start_hour * 60
+
+    if current_minutes <= 0:
+        # 8点之前，睡觉时间，步数不增长
+        time_rate = 0.0
+    elif current_minutes >= total_grow_minutes:
+        # 20点之后，步数增长完成，保持满值
+        time_rate = 1.0
+    else:
+        # 8-20点之间，按时间线性递增，实现整点逐步增长
+        time_rate = current_minutes / total_grow_minutes
 
     base_min = get_int_value_default(config, 'MIN_STEP', 18000)
     base_max = get_int_value_default(config, 'MAX_STEP', 25000)
@@ -62,10 +76,10 @@ def get_min_max_by_time(hour=None, minute=None):
         print(f"获取天气失败：{e}")
         weather_rate = 1.0
 
-    final_min = int(base_min * weekend_rate * random_min_rate * lazy_rate * weather_rate)
-    final_max = int(base_max * weekend_rate * random_max_rate * lazy_rate * weather_rate)
+    final_min = int(base_min * weekend_rate * random_min_rate * lazy_rate * weather_rate * time_rate)
+    final_max = int(base_max * weekend_rate * random_max_rate * lazy_rate * weather_rate * time_rate)
 
-    return int(time_rate * final_min), int(time_rate * final_max)
+    return final_min, final_max
 
 def fake_ip():
     return f"{223}.{random.randint(64, 117)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
@@ -274,48 +288,48 @@ def execute():
                 if idx < total:
                     time.sleep(sleep_seconds)
 
-        if encrypt_support:
-            persist_user_tokens()
+            if encrypt_support:
+                persist_user_tokens()
 
-        success_count = 0
-        for result in exec_results:
-            if result['success']:
-                success_count += 1
+            success_count = 0
+            for result in exec_results:
+                if result['success']:
+                    success_count += 1
 
-        summary = f"\n执行完成：总数{total}，成功{success_count}，失败{total - success_count}"
-        print(summary)
+            summary = f"\n执行完成：总数{total}，成功{success_count}，失败{total - success_count}"
+            print(summary)
 
-        tg_bot_token = config.get('TG_BOT_TOKEN')
-        tg_user_id = config.get('TG_USER_ID')
-        if tg_bot_token and tg_user_id:
-            try:
-                msg = f"""【Zepp自动刷步任务执行完成】
+            tg_bot_token = config.get('TG_BOT_TOKEN')
+            tg_user_id = config.get('TG_USER_ID')
+            if tg_bot_token and tg_user_id:
+                try:
+                    msg = f"""【Zepp自动刷步任务执行完成】
 执行时间：{format_now()}
 当前城市：昆山
 天气系数：{weather_rate:.2f}
 是否周日：{"是" if time_bj.weekday() ==6 else "否"}
 执行结果：
 """
-                for result in exec_results:
-                    user = desensitize_user_name(result['user'])
-                    success = "成功" if result['success'] else "失败"
-                    msg += f"账号：{user}，{success}，信息：{result['msg']}\n"
-                msg += f"\n总数：{total}，成功：{success_count}，失败：{total - success_count}"
-                
-                resp = requests.post(
-                    f"https://api.telegram.org/bot{tg_bot_token}/sendMessage",
-                    json={
-                        "chat_id": tg_user_id,
-                        "text": msg
-                    },
-                    timeout=10
-                )
-                if resp.status_code == 200:
-                    print("推送结果到Telegram成功")
-                else:
-                    print(f"推送结果到Telegram失败：{resp.text}")
-            except Exception as e:
-                print(f"推送结果到Telegram失败：{e}")
+                    for result in exec_results:
+                        user = desensitize_user_name(result['user'])
+                        success = "成功" if result['success'] else "失败"
+                        msg += f"账号：{user}，{success}，信息：{result['msg']}\n"
+                    msg += f"\n总数：{total}，成功：{success_count}，失败：{total - success_count}"
+                    
+                    resp = requests.post(
+                        f"https://api.telegram.org/bot{tg_bot_token}/sendMessage",
+                        json={
+                            "chat_id": tg_user_id,
+                            "text": msg
+                        },
+                        timeout=10
+                    )
+                    if resp.status_code == 200:
+                        print("推送结果到Telegram成功")
+                    else:
+                        print(f"推送结果到Telegram失败：{resp.text}")
+                except Exception as e:
+                    print(f"推送结果到Telegram失败：{e}")
     else:
         print(f"账号数({len(user_list)})与密码数({len(passwd_list)})不匹配，退出")
         exit(1)
