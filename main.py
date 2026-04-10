@@ -15,20 +15,44 @@ from util.aes_help import encrypt_data, decrypt_data
 import util.zepp_helper as zeppHelper
 import util.push_util as push_util
 
-config = {}
-user_tokens = {}
-use_concurrent = False
-sleep_seconds = 1
-encrypt_support = False
-aes_key = ""
-push_config = {}
-time_bj = get_beijing_time()
-
-
+# 第一步：先定义所有工具函数，再初始化全局变量
 def get_int_value_default(_config: dict, _key, default):
     _config.setdefault(_key, default)
     return int(_config.get(_key))
 
+def fake_ip():
+    return f"{223}.{random.randint(64, 117)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
+
+def desensitize_user_name(user):
+    if len(user) <= 8:
+        ln = max(math.floor(len(user) / 3), 1)
+        return f'{user[:ln]}***{user[-ln:]}'
+    return f'{user[:3]}****{user[-4:]}'
+
+def get_beijing_time():
+    target_timezone = pytz.timezone('Asia/Shanghai')
+    return datetime.now().astimezone(target_timezone)
+
+def format_now():
+    return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
+
+def get_time():
+    current_time = get_beijing_time()
+    return "%.0f" % (current_time.timestamp() * 1000)
+
+def get_access_token(location):
+    code_pattern = re.compile("(?<=access=).*?(?=&)")
+    result = code_pattern.findall(location)
+    if result is None or len(result) == 0:
+        return None
+    return result[0]
+
+def get_error_code(location):
+    code_pattern = re.compile("(?<=error=).*?(?=&)")
+    result = code_pattern.findall(location)
+    if result is None or len(result) == 0:
+        return None
+    return result[0]
 
 def get_min_max_by_time(hour=None, minute=None):
     if hour is None:
@@ -52,47 +76,15 @@ def get_min_max_by_time(hour=None, minute=None):
     
     return calc_min_step, calc_max_step
 
-
-def fake_ip():
-    return f"{223}.{random.randint(64, 117)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
-
-
-def desensitize_user_name(user):
-    if len(user) <= 8:
-        ln = max(math.floor(len(user) / 3), 1)
-        return f'{user[:ln]}***{user[-ln:]}'
-    return f'{user[:3]}****{user[-4:]}'
-
-
-def get_beijing_time():
-    target_timezone = pytz.timezone('Asia/Shanghai')
-    return datetime.now().astimezone(target_timezone)
-
-
-def format_now():
-    return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def get_time():
-    current_time = get_beijing_time()
-    return "%.0f" % (current_time.timestamp() * 1000)
-
-
-def get_access_token(location):
-    code_pattern = re.compile("(?<=access=).*?(?=&)")
-    result = code_pattern.findall(location)
-    if result is None or len(result) == 0:
-        return None
-    return result[0]
-
-
-def get_error_code(location):
-    code_pattern = re.compile("(?<=error=).*?(?=&)")
-    result = code_pattern.findall(location)
-    if result is None or len(result) == 0:
-        return None
-    return result[0]
-
+# 第二步：初始化全局变量（此时get_beijing_time已定义）
+config = {}
+user_tokens = {}
+use_concurrent = False
+sleep_seconds = 1
+encrypt_support = False
+aes_key = ""
+push_config = {}
+time_bj = get_beijing_time()  # 现在调用不会报错
 
 class MiMotionRunner:
     def __init__(self, _user, _passwd):
@@ -191,7 +183,6 @@ class MiMotionRunner:
         ok, msg = zeppHelper.post_fake_brand_data(step, app_token, self.user_id)
         return f"修改步数（{step}）[" + msg + "]", ok
 
-
 def run_single_account(total, idx, user_mi, passwd_mi):
     idx_info = ""
     if idx is not None:
@@ -212,7 +203,6 @@ def run_single_account(total, idx, user_mi, passwd_mi):
                        "msg": f"执行异常:{traceback.format_exc()}"}
     print(log_str)
     return exec_result
-
 
 def execute():
     user_list = users.split('#')
@@ -246,7 +236,6 @@ def execute():
         print(f"账号数长度[{len(user_list)}]和密码数长度[{len(passwd_list)}]不匹配，跳过执行")
         exit(1)
 
-
 def prepare_user_tokens() -> dict:
     data_path = r"encrypted_tokens.data"
     if os.path.exists(data_path):
@@ -261,7 +250,6 @@ def prepare_user_tokens() -> dict:
     else:
         return dict()
 
-
 def persist_user_tokens():
     data_path = r"encrypted_tokens.data"
     try:
@@ -271,7 +259,6 @@ def persist_user_tokens():
         print("token已加密保存")
     except:
         print("token加密保存失败：", traceback.format_exc())
-
 
 user_tokens = prepare_user_tokens()
 
